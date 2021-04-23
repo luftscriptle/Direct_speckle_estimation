@@ -1,6 +1,7 @@
 import numpy as np
-import tqdm
 import scipy.sparse
+
+
 def o_sel(theta, params):
     """
     :param theta: Array of angles for which we wish to compute the o_sel coefficient
@@ -16,6 +17,15 @@ def o_sel(theta, params):
     return coefficient
 
 
+def prefact(theta_rx, params):
+    theta_tx = params['angle_tx']
+    c_ref = params['c_ref']
+    theta_diff = 1/2 * (theta_tx - theta_rx)
+    theta_mid = 1/2 * (theta_tx + theta_rx)
+    coefficient = c_ref/(2 * np.cos(theta_diff))/np.cos(theta_mid)
+    return coefficient
+
+
 def get_z(d_grid, theta_rx, x_gamma):
     return d_grid[:, np.newaxis, np.newaxis]/np.cos(theta_rx[np.newaxis, :, np.newaxis]) \
            - x_gamma[np.newaxis, np.newaxis, :]*np.tan(theta_rx[np.newaxis, :, np.newaxis])
@@ -25,7 +35,6 @@ def tukey_window(val, params):
     """
     :param val: x-position of the point we wish to compute the windowing
     :param params: dict containing the parameters probe_elem_width, probe_n_elem, probe_pitch
-    :param alpha: parameter of the windowing
     :return:
     """
 
@@ -59,7 +68,7 @@ def o_tx(z_computed, x_gamma, theta_tx, params):
 def o_rx(z_computed, theta_rx, x_gamma, params):
     xt = x_gamma[np.newaxis, np.newaxis, :] - z_computed*np.tan(theta_rx[np.newaxis, :, np.newaxis])
     coefficient = 1/np.sqrt(np.sqrt((x_gamma[np.newaxis, np.newaxis, :]-xt)**2 + z_computed**2))\
-            * o_sel(theta_rx, params)[np.newaxis, :, np.newaxis]
+        * o_sel(theta_rx, params)[np.newaxis, :, np.newaxis]
     return coefficient
 
 
@@ -77,7 +86,10 @@ def get_weight_operator(d_grid, theta_rx, sigma_grid, params):
     Nd, Nx, Nz, N_theta = d_grid.size, x_coord.size, z_coord.size, theta_rx.size
     theta_tx = params['angle_tx']
     z_computed = get_z(d_grid, theta_rx, x_coord)
-    o_full = o_tot(theta_tx, z_computed, theta_rx, x_coord, params)
+    o_matrix = o_tot(theta_tx, z_computed, theta_rx, x_coord, params)
+    jacob_grad = prefact(theta_rx, params)
+    o_full = o_matrix * jacob_grad[np.newaxis, :, np.newaxis]
+
     z_center = (z_computed - z_offset)/z_delta
     ind_z_inf = np.int32(np.floor(z_center))
     ind_z_sup = ind_z_inf+1
@@ -93,12 +105,11 @@ def get_weight_operator(d_grid, theta_rx, sigma_grid, params):
     beta = (z_sup - z_computed) / z_delta
     alpha_val = alpha[validity_matrix_inf]
     beta_val = beta[validity_matrix_sup]
-    tic = time.time()
-    ind_d = (np.arange(Nd)[:, np.newaxis, np.newaxis]\
-        * np.ones((N_theta, Nx), dtype=np.int32))
+    ind_d = (np.arange(Nd)[:, np.newaxis, np.newaxis]
+            * np.ones((N_theta, Nx), dtype=np.int32))
     ind_x = (np.arange(Nx)*np.ones((Nd, N_theta), dtype=np.int32)[..., np.newaxis])
-    ind_theta = (np.arange(N_theta)[np.newaxis, :, np.newaxis]\
-        * np.ones((Nd, Nx), dtype=np.int32)[:, np.newaxis, :])
+    ind_theta = (np.arange(N_theta)[np.newaxis, :, np.newaxis]
+                * np.ones((Nd, Nx), dtype=np.int32)[:, np.newaxis, :])
     ind_d_inf = ind_d[validity_matrix_inf]
     ind_d_sup = ind_d[validity_matrix_sup]
     ind_x_inf = ind_x[validity_matrix_inf]
@@ -113,7 +124,7 @@ def get_weight_operator(d_grid, theta_rx, sigma_grid, params):
     ind_x_z_sup = ind_x_sup*Nz + ind_z_sup
     ind_col_full = np.concatenate((ind_x_z_inf, ind_x_z_sup))
     ind_row_full = np.concatenate((ind_d_theta_inf, ind_d_theta_sup))
-    val_full = np.concatenate((val_inf, val_sup))
+    val_full = np.concatenate((val_inf, val_sup))*x_delta*z_delta
     operator = scipy.sparse.csc_matrix((val_full, (ind_row_full, ind_col_full)), shape=(Nd*N_theta, Nx*Nz))
     return operator
 
@@ -137,11 +148,6 @@ def get_weight_operator(d_grid, theta_rx, sigma_grid, params):
 # print('size of d_ind_full : ', list_ind_d_full.size)
 # print('Nd = ', Nd)
 # print('max of d_ind : ', list_ind_d_full.max())
-
-
-list_row_ind = []
-list_col_ind = []
-value = []
 # print('expected size : ', Nx*Nd*N_theta*2)
 # print('size of list_ind_x_full : ', list_ind_x_full)
 # print('size of list_ind_theta_full : ', list_ind_theta_full)
@@ -149,29 +155,55 @@ value = []
 # plt.plot(list_ind_z_full)
 # plt.show()
 
-
-if __name__ == '__main__':
-    import matplotlib.pyplot as plt
-    from Donnees.parameters_dico import  experiment_parameters
-    import Samuel.core.grid as grid
-    import time
-    sigma_ref = np.log(
-        np.load('C:\\Users\\louis\\Documents\\ARPE\\Projet-ARPE\\projet_arpe\\code\\'
-                'Optimisation\\sigma_rmse.npy'))
-    delta_x_grid = 2 * experiment_parameters['probe_pitch']
-    delta_z_grid = 2 * experiment_parameters['probe_pitch']
-    experiment_parameters['angle_tx'] = 0.1
-    Nx = 110
-    Nz = 110
-    z_min = 5e-3
-    x_min = -Nx * delta_x_grid / 2
-    sigma_grid = grid.GridND((Nx, Nz), (delta_x_grid, delta_z_grid), (x_min, z_min))
-    x_coord, z_coord = sigma_grid.coordinates
-    print(z_coord)
-    x_gamma = 2 * ((np.arange(experiment_parameters['probe_n_elem']) * experiment_parameters['probe_pitch']) -
-       ((experiment_parameters['probe_n_elem'] - 1) / 2 * experiment_parameters['probe_pitch']))
-    d_grid = np.linspace(5e-3, 3e-2, 40)
-    theta_rx = np.linspace(-0.1, 0.1, 70)
-    operator = get_weight_operator(d_grid, theta_rx, sigma_grid, experiment_parameters)
-    mes = np.load('C:\\Users\\louis\\Documents\\ARPE\\Projet-ARPE\\projet_arpe\\code\\Donnees_pwave\\data.npy')
-    print(mes.shape)
+#
+# if __name__ == '__main__':
+#     import h5py
+#     import tqdm
+#     import matplotlib.pyplot as plt
+#     from Donnees.parameters_dico import  experiment_parameters
+#     import Samuel.core.grid as grid
+#     import time
+#     sigma_ref = np.log(
+#         np.load('C:\\Users\\louis\\Documents\\ARPE\\Projet-ARPE\\projet_arpe\\code\\'
+#                 'Optimisation\\sigma_rmse.npy'))
+#     delta_x_grid = 0.5 * experiment_parameters['probe_pitch']
+#     delta_z_grid = 5 * experiment_parameters['probe_pitch']
+#     experiment_parameters['angle_tx'] = 0.
+#     Nx = 110
+#     Nz = 3000
+#     z_min = 5e-3
+#     x_min = -Nx * delta_x_grid / 2
+#     sigma_grid = grid.GridND((Nx, Nz), (delta_x_grid, delta_z_grid), (x_min, z_min))
+#     x_coord, z_coord = sigma_grid.coordinates
+#     x_gamma = 2 * ((np.arange(experiment_parameters['probe_n_elem']) * experiment_parameters['probe_pitch']) -
+#        ((experiment_parameters['probe_n_elem'] - 1) / 2 * experiment_parameters['probe_pitch']))
+#     Nd, N_theta = 50, 10
+#     d_grid = np.linspace(5e-3, 2e-2, Nd)
+#
+#     theta_rx = np.linspace(-0.1, 0.1, N_theta)
+#     sigma_shape = (Nd, N_theta)
+#     operator = get_weight_operator(d_grid, theta_rx, sigma_grid, experiment_parameters)
+#     mes = np.load('C:\\Users\\louis\\Documents\\ARPE\\Projet-ARPE\\projet_arpe\\code'
+#                   '\\Donnees_pwave\\data.npy')
+#     fig, ax = plt.subplots(1, 5)
+#     data = []
+#     xx, zz = np.meshgrid(z_coord, x_coord)
+#     tab_sin = (np.sin(xx)+ np.cos(zz))
+#     print("shape de l'operateur : ", operator.shape)
+#     h_h_t = operator.dot(operator.T)
+#     diag = np.diag(h_h_t.todense())
+#     to_show = h_h_t.todense()/diag
+#     eig = np.linalg.eig(to_show)[0]
+#     print('rho_s = ', np.max(eig))
+#     plt.matshow(to_show)
+#     plt.show()
+#     for i in range(3):
+#         dummy_mes = -np.ones(operator.shape[0])*5 + 10 * np.random.rand((operator.shape[0]))
+#         essai = operator.dot(operator.T.dot(dummy_mes))/dummy_mes
+#         data.append(essai)
+#         ax[i].matshow(essai.reshape(sigma_shape))
+#     ax[3].matshow(np.log(np.abs((data[1]-data[0]))).reshape(sigma_shape))
+#     ax[4].matshow(np.log(np.abs((data[2]-data[1]))).reshape(sigma_shape))
+#     plt.show()
+#     print(np.mean(np.log(np.abs((data[1]-data[0])))))
+#     print(np.mean(np.log(np.abs((data[2]-data[1])))))
