@@ -24,4 +24,5 @@ Nd, N_theta = 80, 70
 d_grid = np.linspace(5e-3, 2e-2, Nd)
 theta_rx = np.linspace(-0.1, 0.1, N_theta)
 sigma_shape = (Nd, N_theta)
+
 operator = get_weight_operator(d_grid, theta_rx, sigma_grid, experiment_parameters)
